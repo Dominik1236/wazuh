@@ -1828,8 +1828,27 @@ int w_msg_hash_queues_push(const char *str, char *file, unsigned long size, logt
     int i;
     char *file_cpy;
     int result;
+    static int utf8_reported = 0;
+    char *sanitized = NULL;
 
     w_logcollector_state_update_file(file, size);
+
+    /* The manager serialises this line into JSON, which must be valid UTF-8.
+     * Replace invalid sequences here, where the source file is still known.
+     */
+    if (!w_utf8_valid(str)) {
+        sanitized = w_utf8_filter(str, true);
+
+        if (!utf8_reported) {
+            mwarn("Invalid UTF-8 byte in a log line from file '%s'. Replacing it with U+FFFD.", file);
+            utf8_reported = 1;
+        } else {
+            mdebug2("Invalid UTF-8 byte in a log line from file '%s'. Replacing it with U+FFFD.", file);
+        }
+
+        str = sanitized;
+        size = strlen(sanitized) + 1;
+    }
 
     for (i = 0; targets[i].log_socket; i++)
     {
@@ -1848,6 +1867,8 @@ int w_msg_hash_queues_push(const char *str, char *file, unsigned long size, logt
             }
         }
     }
+
+    os_free(sanitized);
 
     return 0;
 }
