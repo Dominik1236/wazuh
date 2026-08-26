@@ -275,6 +275,30 @@ char *el_getMessage(EVENTLOGRECORD *er,  char *name,
     return (NULL);
 }
 
+/**
+ * @brief Return a UTF-8 copy of a string produced by the classic Eventlog API.
+ *
+ * The manager serialises this line into JSON, which must be valid UTF-8. The
+ * ANSI Eventlog API (ReadEventLogA, LookupAccountSidA, FormatMessageA) returns
+ * bytes in the system codepage, so transcode rather than replace: CP_ACP is
+ * exactly the codepage those calls produced, and converting keeps the character
+ * instead of flattening it. Fall back to replacement when the codepage guess
+ * fails, so the event still ships.
+ *
+ * @param msg Message in the system ANSI codepage, or already valid UTF-8.
+ * @return Allocated UTF-8 copy. Caller frees.
+ */
+static char *el_to_utf8(const char *msg)
+{
+    char *utf8 = auto_to_utf8(msg);
+
+    if (utf8 == NULL) {
+        utf8 = w_utf8_filter(msg, true);
+    }
+
+    return utf8;
+}
+
 /* Reads the event log */
 void readel(os_el *el, int printit)
 {
@@ -469,14 +493,18 @@ void readel(os_el *el, int printit)
                          computer_name,
                          descriptive_msg != NULL ? descriptive_msg : el_string);
 
+                char *utf8_msg = el_to_utf8(final_msg);
+
                 w_logcollector_state_update_file(el->name, strlen(final_msg));
 
-                if (SendMSG(logr_queue, final_msg, "WinEvtLog", LOCALFILE_MQ) < 0) {
+                if (SendMSG(logr_queue, utf8_msg, "WinEvtLog", LOCALFILE_MQ) < 0) {
                     merror(QUEUE_SEND);
                     w_logcollector_state_update_target(el->name, "agent", true);
                 } else {
                     w_logcollector_state_update_target(el->name, "agent", false);
                 }
+
+                os_free(utf8_msg);
             }
 
             if (descriptive_msg != NULL) {
@@ -506,7 +534,10 @@ void readel(os_el *el, int printit)
 
         /* Send message about cleared */
         snprintf(msg_alert, 512, "wazuh: Event log cleared: '%s'", el->name);
-        SendMSG(logr_queue, msg_alert, "WinEvtLog", LOCALFILE_MQ);
+
+        char *utf8_alert = el_to_utf8(msg_alert);
+        SendMSG(logr_queue, utf8_alert, "WinEvtLog", LOCALFILE_MQ);
+        os_free(utf8_alert);
 
         /* Close the event log and reopen */
         CloseEventLog(el->h);

@@ -270,6 +270,18 @@ static char *report_collect(const report_source_t *sources, size_t count) {
     cJSON_AddItemToObject(root, "modules", report);
     document = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
+
+    /* Replace the offending bytes so the document still ships. Only bytes >= 0x80
+     * inside string values change, so the JSON structure is untouched.
+     */
+    if (document != NULL && !w_utf8_valid(document)) {
+        char *sanitized = w_utf8_filter(document, true);
+
+        mdebug1("Invalid UTF-8 byte in the agent report. Replacing it with U+FFFD.");
+        os_free(document);
+        document = sanitized;
+    }
+
     return document;
 }
 
