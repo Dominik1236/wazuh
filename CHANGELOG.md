@@ -19,6 +19,7 @@ All notable changes to this project will be documented in this file.
 - Fixed `wazuh-execd` crashing when more active response commands than supported are defined. ([#38410](https://github.com/wazuh/wazuh/pull/38410))
 - Fixed WPK upgrade failing on agents without the `find` binary. ([#38431](https://github.com/wazuh/wazuh/pull/38431))
 - Bounded the `snort-full` log record appends to the available buffer space and sized the queued preprocessor message from its own line in `wazuh-logcollector`. ([#38472](https://github.com/wazuh/wazuh/pull/38472))
+- Fixed FIM whodata falling back to audit on arm64 kernels where the BPF-LSM hooks cannot load or attach, by retrying with the kprobe program set. ([#38545](https://github.com/wazuh/wazuh/pull/38545))
 
 ## [v4.14.8]
 
