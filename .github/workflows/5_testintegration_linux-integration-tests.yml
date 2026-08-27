@@ -127,7 +127,15 @@ jobs:
             exit 1
           fi
 
-          sudo WAZUH_MANAGER="127.0.0.1" dpkg -i "${PACKAGE_PATH}" || sudo apt-get install -f -y
+          # WAZUH_MANAGER_ENDPOINT="" is the installer's documented opt-out from the manager's
+          # default /wazuh-manager/ prefix (set-but-empty is a distinct case from unset, see
+          # src/init/register_configure_agent.sh). Without it the agent enrolls under that prefix,
+          # gets a 404 from the manager these suites run against, and never opens agentd's startup
+          # gate -- so modulesd blocks in startup_gate_wait_for_ready() and no module ever starts.
+          # #38492 added this same opt-out to the Windows IT workflow and to the suites that own a
+          # <manager> block; the ones that do not (sca, syscollector, github, office365) inherit
+          # the package's ossec.conf and need it here.
+          sudo WAZUH_MANAGER="127.0.0.1" WAZUH_MANAGER_ENDPOINT="" dpkg -i "${PACKAGE_PATH}" || sudo apt-get install -f -y
 
           sudo awk '
             /<rootcheck>/ { in_block=1; print; next }
