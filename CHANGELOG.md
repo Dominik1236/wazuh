@@ -71,6 +71,7 @@
 | [#38511](https://github.com/wazuh/wazuh/issues/38511) | Fixed world-writable permissions on bundled Python files after DEB installation, caused by the permission restoration script following symlinks. |
 | [#38547](https://github.com/wazuh/wazuh/issues/38547) | Fixed the API serving its OpenAPI specification and exact version at `/openapi.json` and `/openapi.yaml` without authentication. |
 | [#38565](https://github.com/wazuh/wazuh/issues/38565) | Bounded the `search` query parameter to 1024 characters across every endpoint that accepts it, fixed the API's `wazuh-db` socket client raising an unhandled error instead of a clean `500` when `wazuh-db` closes the connection on an oversized request, and stopped the API from returning `wazuh-db`'s raw backend error text (including SQL fragments) to the caller. |
+| [#38633](https://github.com/wazuh/wazuh/issues/38633) | Fixed slow delivery of agent-groups assignments on worker nodes when the assignment reaches the worker before the group itself: the worker now retries the rejected assignment instead of waiting for the checksum mismatch limit, and `wazuh-manager-db` logs the transient condition with debug level instead of `ERROR` on worker nodes. |
 
 ### Agent
 
