@@ -39,4 +39,17 @@ def path_to_edit(test_metadata: dict) -> str:
 
     yield to_edit
 
-    file.delete_path_recursively(to_edit)
+    if sys.platform == WINDOWS:
+        max_retries = 15
+        retry_delay = 1
+        for attempt in range(max_retries):
+            try:
+                file.delete_path_recursively(to_edit)
+                break
+            except PermissionError as exception:
+                if attempt == max_retries - 1:
+                    raise
+                print(f"Retrying deletion of {to_edit}: {exception}")
+                time.sleep(retry_delay)
+    else:
+        file.delete_path_recursively(to_edit)

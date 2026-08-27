@@ -64,7 +64,20 @@ def folder_to_monitor(test_metadata: dict) -> None:
 
     yield path
 
-    file.delete_path_recursively(path)
+    if sys.platform == WINDOWS:
+        max_retries = 15
+        retry_delay = 1
+        for attempt in range(max_retries):
+            try:
+                file.delete_path_recursively(path)
+                break
+            except PermissionError as exception:
+                if attempt == max_retries - 1:
+                    raise
+                print(f"Retrying deletion of {path}: {exception}")
+                sleep(retry_delay)
+    else:
+        file.delete_path_recursively(path)
 
 
 @pytest.fixture()
