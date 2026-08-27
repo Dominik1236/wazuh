@@ -26,6 +26,7 @@ All notable changes to this project will be documented in this file.
 - Fixed WPK upgrade failing on agents without the `find` binary. ([#38431](https://github.com/wazuh/wazuh/pull/38431))
 - Bounded the `snort-full` log record appends to the available buffer space and sized the queued preprocessor message from its own line in `wazuh-logcollector`. ([#38472](https://github.com/wazuh/wazuh/pull/38472))
 - Fixed the `disable-account` active response reporting success when the account was not disabled, and stopped `is_valid_username()` from rejecting valid usernames containing consecutive dots. ([#38637](https://github.com/wazuh/wazuh/pull/38637))
+- Restricted active response usernames to an allowlist, rejecting quotes, shell metacharacters, control characters and non-ASCII bytes. ([#38651](https://github.com/wazuh/wazuh/pull/38651))
 
 ## [v4.14.8]
 
