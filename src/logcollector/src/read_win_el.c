@@ -290,11 +290,20 @@ char *el_getMessage(EVENTLOGRECORD *er,  char *name,
  */
 static char *el_to_utf8(const char *msg)
 {
-    char *utf8 = auto_to_utf8(msg);
+    char *utf8;
+
+    if (w_utf8_valid(msg)) {
+        os_strdup(msg, utf8);
+        return utf8;
+    }
+
+    utf8 = auto_to_utf8(msg);
 
     if (utf8 == NULL) {
         utf8 = w_utf8_filter(msg, true);
     }
+
+    w_utf8_truncate(utf8, OS_MAXSTR - OS_LOG_HEADER - 1);
 
     return utf8;
 }
@@ -495,7 +504,7 @@ void readel(os_el *el, int printit)
 
                 char *utf8_msg = el_to_utf8(final_msg);
 
-                w_logcollector_state_update_file(el->name, strlen(final_msg));
+                w_logcollector_state_update_file(el->name, strlen(utf8_msg));
 
                 if (SendMSG(logr_queue, utf8_msg, "WinEvtLog", LOCALFILE_MQ) < 0) {
                     merror(QUEUE_SEND);

@@ -388,6 +388,8 @@ void send_channel_event(EVT_HANDLE evt, os_channel *channel)
 
     win_format_event_string(xml_event);
 
+    w_utf8_truncate(xml_event, OS_MAXSTR - OS_LOG_HEADER - 1);
+
     w_logcollector_state_update_file(channel->evt_log, strlen(xml_event));
 
     if (SendMSG(logr_queue, xml_event, "EventChannel", WIN_EVT_MQ) < 0) {

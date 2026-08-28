@@ -292,6 +292,31 @@ static void test_collect_config_ignores_a_reply_that_is_not_a_report(void** stat
     free(document);
 }
 
+static void test_collect_config_replaces_an_invalid_utf8_byte(void** state)
+{
+    (void)state;
+    /* 0xE9 is Latin-1 e-acute. cJSON neither rejects nor fixes it, so without
+     * the filter it reaches the manager and the indexer drops the document. */
+    const answer_t answers[] = {
+        {"agent", "ok {\"agent\":{\"profile\":\"caf\xE9\"}}"},
+        {"syscheck", NULL},
+        {"logcollector", NULL},
+        {"wmodules", NULL},
+        {"com", NULL},
+    };
+
+    given(answers, 5);
+    expecting_debug_logs();
+
+    char* document = w_agent_collect_config();
+
+    assert_non_null(document);
+    assert_true(w_utf8_valid(document));
+    assert_non_null(strstr(document, "caf\xEF\xBF\xBD"));
+
+    free(document);
+}
+
 static void test_collect_stats_only_asks_the_daemons_that_produce_them(void** state)
 {
     (void)state;
@@ -322,6 +347,7 @@ int main(void)
         cmocka_unit_test(test_collect_config_reports_the_daemons_that_are_up),
         cmocka_unit_test(test_collect_config_skips_the_cycle_when_nothing_answers),
         cmocka_unit_test(test_collect_config_ignores_a_reply_that_is_not_a_report),
+        cmocka_unit_test(test_collect_config_replaces_an_invalid_utf8_byte),
         cmocka_unit_test(test_collect_stats_only_asks_the_daemons_that_produce_them),
     };
 

@@ -126,3 +126,25 @@ char * w_utf8_filter(const char * string, bool replacement) {
     copy[i] = '\0';
     return copy;
 }
+
+size_t w_utf8_truncate(char * string, size_t max_length) {
+    assert(string != NULL);
+
+    size_t length = strlen(string);
+
+    if (length <= max_length) {
+        return length;
+    }
+
+    /* string[max_length] is the first byte dropped. While it is a continuation
+     * byte (10xxxxxx) the cut falls inside a character, so walk back to its
+     * leading byte and drop the sequence whole. */
+    size_t cut = max_length;
+
+    while (cut > 0 && ((unsigned char)string[cut] & 0xC0) == 0x80) {
+        cut--;
+    }
+
+    string[cut] = '\0';
+    return cut;
+}

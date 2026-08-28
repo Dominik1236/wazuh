@@ -10,6 +10,7 @@
  */
 
 #include <stdbool.h>
+#include <stddef.h>
 
 /**
  * @brief Return whether a string is UTF-8.
@@ -37,3 +38,17 @@ const char * w_utf8_drop(const char * string);
  * @return Return a new string with valid UTF-8 characters only.
  */
 char * w_utf8_filter(const char * string, bool replacement);
+
+
+/**
+ * @brief Truncate a string in place without splitting a UTF-8 character.
+ *
+ * Cutting at a fixed byte offset can fall inside a multi-byte sequence and
+ * leave a partial character behind, which is invalid UTF-8. This drops the
+ * whole trailing sequence instead.
+ *
+ * @param string String to be truncated. Modified in place.
+ * @param max_length Maximum length in bytes, excluding the null terminator.
+ * @return Resulting length in bytes, excluding the null terminator.
+ */
+size_t w_utf8_truncate(char * string, size_t max_length);

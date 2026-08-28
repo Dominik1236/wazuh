@@ -332,8 +332,41 @@ void test_special_unicode_characters(void **state) {
     }
 }
 
+void test_utf8_truncate_keeps_characters_whole(void **state) {
+    (void)state;
+
+    char shorter[] = "hello";
+    assert_int_equal(w_utf8_truncate(shorter, 10), 5);
+    assert_string_equal(shorter, "hello");
+
+    char exact[] = "hello";
+    assert_int_equal(w_utf8_truncate(exact, 5), 5);
+    assert_string_equal(exact, "hello");
+
+    char split[] = "a\xC3\xA9";
+    assert_int_equal(w_utf8_truncate(split, 2), 1);
+    assert_string_equal(split, "a");
+
+    char whole[] = "a\xC3\xA9";
+    assert_int_equal(w_utf8_truncate(whole, 3), 3);
+    assert_string_equal(whole, "a\xC3\xA9");
+
+    char replacement[] = "ab\xEF\xBF\xBD";
+    assert_int_equal(w_utf8_truncate(replacement, 4), 2);
+    assert_string_equal(replacement, "ab");
+
+    char lone[] = "\xE2\x82\xAC";
+    assert_int_equal(w_utf8_truncate(lone, 1), 0);
+    assert_string_equal(lone, "");
+
+    char pair[] = "\xE2\x82\xAC\xE2\x82\xAC";
+    assert_int_equal(w_utf8_truncate(pair, 4), 3);
+    assert_true(w_utf8_valid(pair));
+}
+
 int main(void) {
     const struct CMUnitTest tests[] = {
+        cmocka_unit_test(test_utf8_truncate_keeps_characters_whole),
         cmocka_unit_test(test_valid_utf8_sequences),
         cmocka_unit_test(test_invalid_utf8_sequences),
         cmocka_unit_test(test_utf8_random_replace),
