@@ -15,11 +15,10 @@ Source of truth: `src/remoted/remoted_module/src/endpoints/controlEndpoint.cpp` 
 therefore **MUST**, for every control request:
 
 - send `protocol-version: 1`;
-- send `Authorization: Wazuh <agent-id>:<unix-timestamp>:<aes-cmac-hex>`, signing the canonical
-  string described in [04-wire-protocol.md](04-wire-protocol.md) over the request target `/control`
-  and the exact body bytes.
+- send `Authorization: Bearer <wazuh-agent+jwt token>`, a fresh token per request minted with the
+  agent's key as described in [04-wire-protocol.md](04-wire-protocol.md).
 
-The **agent id the manager uses comes from the `Authorization` header**, not from the JSON body. The
+The **agent id the manager uses is the token's verified `sub`**, not anything in the JSON body. The
 body carries no identity field at all, so a sender that signs with agent A's key while describing
 agent B in the payload is simply agent A as far as the manager is concerned.
 
@@ -86,7 +85,11 @@ Response:
 
 ```json
 {
-  "agent": { "groups": ["default"], "config_hash": "<sha or \"0\">" },
+  "agent": {
+    "groups": ["default"],
+    "config_token": "<opaque /download resource_id>",
+    "config_hash": "<sha or \"0\">"
+  },
   "settings_hash": "<sha256 hex>",
   "tasks": [ { "task_id": 1, "task_type": "...", "payload": {} } ]
 }
@@ -148,10 +151,11 @@ path — the notify-storm scenario **SHOULD** report both, and F9c-4 **MUST** st
 
 And it **MUST NOT** use any field of the body to change what it does next, with exactly ONE
 exception: `limits` does not become a rate limit, `agent.groups` does not reach the sessions'
-`Start.groups`, `config_hash` and `settings_hash` are not compared across requests, and `tasks` are
-never executed or acknowledged. The reasons are two: a load generator whose shape depends on the
-system under test produces incomparable numbers between runs, and consuming that payload would make
-the tool a conformance checker for a contract that is not what this benchmark measures.
+`Start.groups`, `config_hash`, `config_token` and `settings_hash` are not compared across requests
+or turned into a `/download` call, and `tasks` are never executed or acknowledged. The reasons are
+two: a load generator whose shape depends on the system under test produces incomparable numbers
+between runs, and consuming that payload would make the tool a conformance checker for a contract
+that is not what this benchmark measures.
 
 The exception is `notify`'s `vd_feed_offset`: it is the one piece of server state a real agent
 DOES act on (deciding when to request a VD re-scan through `POST /scan/vd` — see
