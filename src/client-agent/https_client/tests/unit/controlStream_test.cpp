@@ -14,6 +14,7 @@
 #include "fakeSysSeams.hpp"
 #include "fakeTaskIdStore.hpp"
 #include "fakeVdOffsetStore.hpp"
+#include "jwtSigner.hpp"
 #include "mockCallbackSink.hpp"
 #include "mockHttpPerformer.hpp"
 
@@ -82,9 +83,20 @@ namespace
                 , m_spoolFactory(::testing::TempDir())
                 , m_configHash("abc")
                 , m_authGate(m_sink, [] {})
-            , m_stream(m_config, m_performer, m_signer, m_clock, m_random, m_sink,
-                       m_spoolFactory, m_configHash, m_cluster, m_authGate, m_compressionGate,
-                       m_taskStore, m_vdOffsetStore, [this] { return m_hostJson; })
+            , m_stream(m_config,
+                       m_performer,
+                       m_signer,
+                       m_clock,
+                       m_random,
+                       m_sink,
+                       m_spoolFactory,
+                       m_configHash,
+                       m_cluster,
+                       m_authGate,
+                       m_compressionGate,
+                       m_taskStore,
+                       m_vdOffsetStore,
+                       [this] { return m_hostJson; })
             {
             }
 
@@ -99,8 +111,8 @@ namespace
                 return ModuleConfig::fromC(config);
             }
 
-            ConfigKeyProvider m_keyProvider {"000102030405060708090a0b0c0d0e0f"};
-            CmacSigner m_signer;
+            ConfigKeyProvider m_keyProvider {"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"};
+            JwtSigner m_signer;
             ModuleConfig m_config;
             FakeClock m_clock;
             ScriptedRandom m_random {{0.0}};
@@ -165,10 +177,10 @@ TEST_F(ControlStreamTest, FastFollowupAlsoArmedWhenASettingsRefreshIsQueued)
         R"({"settings_hash":")" + managerSettingsHash(R"({"limits":{"eps":9}})") + R"("})";
 
     EXPECT_CALL(m_performer, perform(_))
-    .WillOnce(Return(response(TransportStatus::Ok, 200, startupV1))) // Startup.
+    .WillOnce(Return(response(TransportStatus::Ok, 200, startupV1)))       // Startup.
     .WillOnce(Return(response(TransportStatus::Ok, 200, notifyMismatch))); // Notify: arms refresh.
 
-    m_stream.step(m_waiter); // Startup accepted.
+    m_stream.step(m_waiter);                     // Startup accepted.
     EXPECT_TRUE(m_stream.consumeFastFollowup()); // Consumed here, not left for the assertion below.
 
     m_stream.step(m_waiter); // Notify: settings_hash mismatch -> arms a refresh Startup.
@@ -178,8 +190,7 @@ TEST_F(ControlStreamTest, FastFollowupAlsoArmedWhenASettingsRefreshIsQueued)
 TEST_F(ControlStreamTest, StartupStoresManagerAuthoritativeClusterIdentity)
 {
     EXPECT_CALL(m_performer, perform(_))
-    .WillOnce(Return(response(TransportStatus::Ok, 200,
-                              R"({"cluster":{"name":"prod"}})")));
+    .WillOnce(Return(response(TransportStatus::Ok, 200, R"({"cluster":{"name":"prod"}})")));
     m_stream.step(m_waiter);
     EXPECT_EQ("prod", m_cluster.get().name);
 }
@@ -188,8 +199,7 @@ TEST_F(ControlStreamTest, StartupWithoutClusterOverwritesToEmpty)
 {
     // A prior identity must not linger when the manager reports none.
     m_cluster.set("stale");
-    EXPECT_CALL(m_performer, perform(_))
-    .WillOnce(Return(response(TransportStatus::Ok, 200, R"({"limits":{}})")));
+    EXPECT_CALL(m_performer, perform(_)).WillOnce(Return(response(TransportStatus::Ok, 200, R"({"limits":{}})")));
     m_stream.step(m_waiter);
     EXPECT_TRUE(m_cluster.get().name.empty());
 }
@@ -198,8 +208,7 @@ TEST_F(ControlStreamTest, SettingsRefreshStartupAlsoOverwritesCluster)
 {
     const std::string startupV1 = R"({"limits":{"eps":0},"cluster":{"name":"c1"}})";
     const std::string startupV2 = R"({"limits":{"eps":9},"cluster":{"name":"c2"}})";
-    const std::string notifyV2 =
-        R"({"settings_hash":")" + managerSettingsHash(startupV2) + R"("})";
+    const std::string notifyV2 = R"({"settings_hash":")" + managerSettingsHash(startupV2) + R"("})";
 
     int calls = 0;
     EXPECT_CALL(m_performer, perform(_))
@@ -250,9 +259,7 @@ TEST_F(ControlStreamTest, PersistentAuthFailureGoesAuthError)
 {
     EXPECT_CALL(m_sink, onStateChange(HC_STATE_AUTH_ERROR));
     // A 401 gets one fresh-timestamp retry; a second 401 escalates to AUTH_ERROR.
-    EXPECT_CALL(m_performer, perform(_))
-    .Times(2)
-    .WillRepeatedly(Return(response(TransportStatus::Ok, 401)));
+    EXPECT_CALL(m_performer, perform(_)).Times(2).WillRepeatedly(Return(response(TransportStatus::Ok, 401)));
 
     EXPECT_FALSE(m_stream.step(m_waiter));
     EXPECT_EQ(HC_STATE_AUTH_ERROR, m_stream.connState());
@@ -262,9 +269,9 @@ TEST_F(ControlStreamTest, PausedGateSkipsHttpAndReleaseResumesWithAFreshStartup)
 {
     // First step: 401 startup engages the gate (via RetrySender) -> AUTH_ERROR.
     EXPECT_CALL(m_performer, perform(_))
-    .WillOnce(Return(response(TransportStatus::Ok, 401)))   // Startup -> 401.
-    .WillOnce(Return(response(TransportStatus::Ok, 401)))   // One-shot auth retry -> 401 -> pause.
-    .WillOnce(Invoke(                                       // Post-release startup.
+    .WillOnce(Return(response(TransportStatus::Ok, 401))) // Startup -> 401.
+    .WillOnce(Return(response(TransportStatus::Ok, 401))) // One-shot auth retry -> 401 -> pause.
+    .WillOnce(Invoke(                                     // Post-release startup.
                   [&](const HttpRequestSpec & spec)
     {
         EXPECT_NE(std::string::npos, bodyOf(spec).find("\"type\":\"startup\""));
@@ -367,8 +374,7 @@ TEST_F(ControlStreamTest, SettingsMismatchTriggersOneStartupRefresh)
     const std::string startupV1 = R"({"limits":{"eps":0}})";
     const std::string startupV2 = R"({"limits":{"eps":100}})";
     const std::string hashV2 = managerSettingsHash(startupV2);
-    const std::string notifyWithV2 =
-        R"({"status":"ok","settings_hash":")" + hashV2 + R"("})";
+    const std::string notifyWithV2 = R"({"status":"ok","settings_hash":")" + hashV2 + R"("})";
 
     std::vector<std::string> requestTypes;
     EXPECT_CALL(m_performer, perform(_))
@@ -376,8 +382,7 @@ TEST_F(ControlStreamTest, SettingsMismatchTriggersOneStartupRefresh)
                         [&](const HttpRequestSpec & spec)
     {
         const std::string body = bodyOf(spec);
-        requestTypes.push_back(body.find("startup") != std::string::npos ? "startup"
-                               : "notify");
+        requestTypes.push_back(body.find("startup") != std::string::npos ? "startup" : "notify");
 
         if (requestTypes.size() == 1)
         {
@@ -398,8 +403,7 @@ TEST_F(ControlStreamTest, SettingsMismatchTriggersOneStartupRefresh)
     m_stream.step(m_waiter); // Notify again: hash matches now, no re-arm.
     m_stream.step(m_waiter); // Still Notify.
 
-    EXPECT_EQ((std::vector<std::string> {"startup", "notify", "startup", "notify", "notify"}),
-              requestTypes);
+    EXPECT_EQ((std::vector<std::string> {"startup", "notify", "startup", "notify", "notify"}), requestTypes);
 }
 
 TEST_F(ControlStreamTest, StaleSettingsHashDoesNotLoopStartups)
@@ -427,28 +431,25 @@ TEST_F(ControlStreamTest, StaleSettingsHashDoesNotLoopStartups)
     m_stream.step(m_waiter); // Notify.
     m_stream.step(m_waiter); // Notify.
 
-    EXPECT_EQ((std::vector<std::string> {"startup", "notify", "startup", "notify", "notify",
-                                         "notify"
-                                        }),
-              requestTypes);
+    EXPECT_EQ((std::vector<std::string> {"startup", "notify", "startup", "notify", "notify", "notify"}), requestTypes);
 }
 
 TEST_F(ControlStreamTest, ConfigMismatchDownloadsVerifiesAndDelivers)
 {
     // The manager reports a config_hash != local ("abc"): the client POSTs
-    // /download with the reported group, the body lands in the response file,
-    // its SHA-256 matches, the local hash updates and the file is delivered.
+    // /download with the reported config_token, the body lands in the response
+    // file, its SHA-256 matches, the local hash updates and the file is delivered.
     const std::string blob = "merged-config-bytes";
     const std::string blobHash = sha256Hex(blob.data(), blob.size());
     const std::string notify =
-        R"({"status":"ok","agent":{"groups":["web-servers"],"config_hash":")" + blobHash +
-        R"("}})";
+        R"({"status":"ok","agent":{"groups":["web-servers"],"config_token":"web-servers",)"
+        R"("config_hash":")" + blobHash + R"("}})";
 
     std::string downloadBody;
     EXPECT_CALL(m_performer, perform(_))
-    .WillOnce(Return(response(TransportStatus::Ok, 200, "{}")))    // Startup.
-    .WillOnce(Return(response(TransportStatus::Ok, 200, notify)))  // Notify.
-    .WillOnce(Invoke(                                              // /download.
+    .WillOnce(Return(response(TransportStatus::Ok, 200, "{}")))   // Startup.
+    .WillOnce(Return(response(TransportStatus::Ok, 200, notify))) // Notify.
+    .WillOnce(Invoke(                                             // /download.
                   [&](const HttpRequestSpec & spec)
     {
         EXPECT_EQ("/download", spec.target);
@@ -473,25 +474,22 @@ TEST_F(ControlStreamTest, ConfigMismatchDownloadsVerifiesAndDelivers)
     EXPECT_EQ(blobHash, m_configHash.get()); // Optimistic update.
     ASSERT_NE(nullptr, delivered);
     std::ifstream file {delivered->path(), std::ios::binary};
-    const std::string content {std::istreambuf_iterator<char>(file),
-                               std::istreambuf_iterator<char>()};
+    const std::string content {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
     EXPECT_EQ(blob, content);
 }
 
-TEST_F(ControlStreamTest, MultiGroupAgentRequestsAllGroupsCommaJoined)
+TEST_F(ControlStreamTest, UsesConfigTokenVerbatimAsTheDownloadResourceId)
 {
-    // A multi-group agent must send every reported group, comma-joined and in the
-    // manager's own order, as resource_id -- the manager's config_hash/merged.mg for
-    // a multi-group agent is keyed by that same CSV (controlHandler.cpp's
-    // toGroupsCsv, hashCache.cpp's getMergedMgPath); requesting only the first group
-    // would fetch a different (single-group) merged.mg that can never match the
-    // hash the manager actually reported, looping forever.
-    const std::string notify =
-        R"({"status":"ok","agent":{"groups":["default","test"],"config_hash":"multi-hash"}})";
+    // The manager names the configuration resource; the agent must NOT derive it. The token
+    // here deliberately bears no relation to the reported groups, which is the whole point:
+    // whatever the manager decides to address a config with (a group selector today, anything
+    // else later), an agent that only passes it through keeps working with no change.
+    const std::string notify = R"({"status":"ok","agent":{"groups":["default","test"],)"
+                               R"("config_token":"opaque-token-42","config_hash":"multi-hash"}})";
 
     std::string downloadBody;
     EXPECT_CALL(m_performer, perform(_))
-    .WillOnce(Return(response(TransportStatus::Ok, 200, "{}")))    // Startup.
+    .WillOnce(Return(response(TransportStatus::Ok, 200, "{}")))   // Startup.
     .WillOnce(Return(response(TransportStatus::Ok, 200, notify))) // Notify.
     .WillOnce(Invoke(
                   [&](const HttpRequestSpec & spec)
@@ -503,7 +501,84 @@ TEST_F(ControlStreamTest, MultiGroupAgentRequestsAllGroupsCommaJoined)
     m_stream.step(m_waiter); // Startup.
     m_stream.step(m_waiter); // Notify -> download attempt.
 
+    EXPECT_EQ(R"({"resource_type":"config","resource_id":"opaque-token-42"})", downloadBody);
+}
+
+TEST_F(ControlStreamTest, MultiGroupTokenIsSentUnchanged)
+{
+    // The 5.0 manager's token IS the group selector: every group, comma-joined, in the
+    // manager's own order (controlHandler.cpp's makeConfigToken over toGroupsCsv). The agent
+    // must relay it byte-for-byte -- re-sorting or truncating it to the first group would
+    // resolve a different merged.mg that can never match the reported hash, looping forever.
+    const std::string notify =
+        R"({"status":"ok","agent":{"groups":["default","test"],)"
+        R"("config_token":"default,test","config_hash":"multi-hash"}})";
+
+    std::string downloadBody;
+    EXPECT_CALL(m_performer, perform(_))
+    .WillOnce(Return(response(TransportStatus::Ok, 200, "{}")))    // Startup.
+    .WillOnce(Return(response(TransportStatus::Ok, 200, notify))) // Notify.
+    .WillOnce(Invoke(
+                  [&](const HttpRequestSpec & spec)
+    {
+        downloadBody = bodyOf(spec);
+        return response(TransportStatus::Ok, 404);
+    }));
+
+    m_stream.step(m_waiter); // Startup.
+    m_stream.step(m_waiter); // Notify -> download attempt.
+
     EXPECT_EQ(R"({"resource_type":"config","resource_id":"default,test"})", downloadBody);
+}
+
+TEST_F(ControlStreamTest, MissingConfigTokenFallsBackToTheGroupsCsv)
+{
+    // A manager that reports no config_token must behave exactly as it did before the field
+    // existed: the agent rebuilds the selector from agent.groups itself, comma-joined in the
+    // reported order.
+    const std::string notify =
+        R"({"status":"ok","agent":{"groups":["default","test"],"config_hash":"multi-hash"}})";
+
+    std::string downloadBody;
+    EXPECT_CALL(m_performer, perform(_))
+    .WillOnce(Return(response(TransportStatus::Ok, 200, "{}")))    // Startup.
+    .WillOnce(Return(response(TransportStatus::Ok, 200, notify))) // Notify.
+    .WillOnce(Invoke(
+                  [&](const HttpRequestSpec & spec)
+    {
+        downloadBody = bodyOf(spec);
+        return response(TransportStatus::Ok, 404);
+    }));
+
+    m_stream.step(m_waiter); // Startup.
+    m_stream.step(m_waiter); // Notify -> download attempt.
+
+    EXPECT_EQ(R"({"resource_type":"config","resource_id":"default,test"})", downloadBody);
+}
+
+TEST_F(ControlStreamTest, MissingConfigTokenAndNoGroupsFallsBackToDefault)
+{
+    // The other half of the pre-config_token behaviour: with no token AND no groups there is
+    // still something to ask for, since every agent is implicitly in "default". A 5.0 manager
+    // never gets here -- it always reports a non-empty token.
+    const std::string notify =
+        R"({"status":"ok","agent":{"groups":[],"config_hash":"some-hash"}})";
+
+    std::string downloadBody;
+    EXPECT_CALL(m_performer, perform(_))
+    .WillOnce(Return(response(TransportStatus::Ok, 200, "{}")))    // Startup.
+    .WillOnce(Return(response(TransportStatus::Ok, 200, notify))) // Notify.
+    .WillOnce(Invoke(
+                  [&](const HttpRequestSpec & spec)
+    {
+        downloadBody = bodyOf(spec);
+        return response(TransportStatus::Ok, 404);
+    }));
+
+    m_stream.step(m_waiter); // Startup.
+    m_stream.step(m_waiter); // Notify -> download attempt.
+
+    EXPECT_EQ(R"({"resource_type":"config","resource_id":"default"})", downloadBody);
 }
 
 TEST_F(ControlStreamTest, AgentGroupsReportedOnFirstNotifyThenOnlyOnChange)
@@ -517,10 +592,10 @@ TEST_F(ControlStreamTest, AgentGroupsReportedOnFirstNotifyThenOnlyOnChange)
     const std::string notifyChanged = R"({"agent":{"groups":["default","test"]}})";
 
     EXPECT_CALL(m_performer, perform(_))
-    .WillOnce(Return(response(TransportStatus::Ok, 200, "{}")))             // Startup.
-    .WillOnce(Return(response(TransportStatus::Ok, 200, notifyDefault)))    // First report.
-    .WillOnce(Return(response(TransportStatus::Ok, 200, notifySame)))       // Unchanged: no re-fire.
-    .WillOnce(Return(response(TransportStatus::Ok, 200, notifyChanged)));   // Changed: re-fires.
+    .WillOnce(Return(response(TransportStatus::Ok, 200, "{}")))           // Startup.
+    .WillOnce(Return(response(TransportStatus::Ok, 200, notifyDefault)))  // First report.
+    .WillOnce(Return(response(TransportStatus::Ok, 200, notifySame)))     // Unchanged: no re-fire.
+    .WillOnce(Return(response(TransportStatus::Ok, 200, notifyChanged))); // Changed: re-fires.
 
     {
         // Scoped so only the two reports are ordered: an InSequence covering the
@@ -557,8 +632,7 @@ TEST_F(ControlStreamTest, AgentGroupsReReportedAfterARefreshStartupEvenWhenUncha
                         [&](const HttpRequestSpec & spec)
     {
         const std::string body = bodyOf(spec);
-        requestTypes.push_back(body.find("startup") != std::string::npos ? "startup"
-                               : "notify");
+        requestTypes.push_back(body.find("startup") != std::string::npos ? "startup" : "notify");
 
         if (requestTypes.size() == 1)
         {
@@ -570,8 +644,8 @@ TEST_F(ControlStreamTest, AgentGroupsReReportedAfterARefreshStartupEvenWhenUncha
             return response(TransportStatus::Ok, 200, startupV2);
         }
 
-        return response(TransportStatus::Ok, 200,
-                        requestTypes.size() == 2 ? notifyArmsRefresh : notifyAfterRefresh);
+        return response(
+                   TransportStatus::Ok, 200, requestTypes.size() == 2 ? notifyArmsRefresh : notifyAfterRefresh);
     }));
 
     EXPECT_CALL(m_sink, onAgentGroups("default")).Times(2);
@@ -584,11 +658,11 @@ TEST_F(ControlStreamTest, AgentGroupsReReportedAfterARefreshStartupEvenWhenUncha
 
 TEST_F(ControlStreamTest, AgentGroupsReportsEmptyRatherThanDefaultFallback)
 {
-    // Unlike /download's resource_id (which substitutes "default" when the agent
-    // has no groups, since /download always needs some group to ask for), an
-    // empty group set here must stay empty: agcom.c treats it as a distinct,
-    // meaningful value ("Empty agent_groups is allowed - fallback to merge.mg
-    // will be used"), not a synonym for being in "default".
+    // This is group IDENTITY, not the download selector (which the manager now names on its
+    // own, in config_token). An empty group set must stay empty here: agcom.c treats it as a
+    // distinct, meaningful value ("Empty agent_groups is allowed - fallback to merge.mg will
+    // be used"), not a synonym for being in "default" -- so no fallback is substituted, even
+    // though the download path's own legacy selector does substitute one.
     const std::string notifyNoGroups = R"({"agent":{"groups":[]}})";
 
     EXPECT_CALL(m_sink, onAgentGroups(std::string {}));
@@ -606,8 +680,7 @@ TEST_F(ControlStreamTest, MatchingConfigHashDoesNotDownload)
     // Local hash is "abc": a notify reporting "abc" triggers nothing, and
     // after a successful download+update, the same hash stays quiet (the
     // optimistic update prevents a re-download every notify).
-    const std::string notify =
-        R"({"status":"ok","agent":{"groups":["default"],"config_hash":"abc"}})";
+    const std::string notify = R"({"status":"ok","agent":{"groups":["default"],"config_hash":"abc"}})";
     EXPECT_CALL(m_performer, perform(_))
     .WillOnce(Return(response(TransportStatus::Ok, 200, "{}")))
     .WillOnce(Return(response(TransportStatus::Ok, 200, notify)))
@@ -624,8 +697,7 @@ TEST_F(ControlStreamTest, ManagerConfigHashIsReportedEvenWhenItMatches)
     // The agent's startup hash gate waits on the manager-validated config, and
     // an agent already in sync never downloads, so the hash has to reach the
     // consumer on the notify itself or the gate never releases.
-    const std::string notify =
-        R"({"status":"ok","agent":{"groups":["default"],"config_hash":"abc"}})";
+    const std::string notify = R"({"status":"ok","agent":{"groups":["default"],"config_hash":"abc"}})";
     EXPECT_CALL(m_performer, perform(_))
     .WillOnce(Return(response(TransportStatus::Ok, 200, "{}")))
     .WillOnce(Return(response(TransportStatus::Ok, 200, notify)));
@@ -642,8 +714,8 @@ TEST_F(ControlStreamTest, ManagerConfigHashIsReportedBeforeADownload)
     // waiting for before /download lands it.
     const std::string blob = "new-config-bytes";
     const std::string blobHash = sha256Hex(blob.data(), blob.size());
-    const std::string notify =
-        R"({"status":"ok","agent":{"groups":["default"],"config_hash":")" + blobHash + R"("}})";
+    const std::string notify = R"({"status":"ok","agent":{"groups":["default"],"config_token":"default",)"
+                               R"("config_hash":")" + blobHash + R"("}})";
     EXPECT_CALL(m_sink, onManagerConfigHash(blobHash)).Times(1);
     EXPECT_CALL(m_performer, perform(_))
     .WillOnce(Return(response(TransportStatus::Ok, 200, "{}")))
@@ -658,9 +730,8 @@ TEST_F(ControlStreamTest, HashMismatchOnTheDownloadedFileDiscardsIt)
 {
     // The downloaded bytes do not match the advertised MD5: no delivery, no
     // local-hash update; the next notify triggers a fresh download attempt.
-    const std::string notify =
-        R"({"status":"ok","agent":{"groups":["default"],"config_hash":"1111111111111111)"
-        R"(1111111111111111"}})";
+    const std::string notify = R"({"status":"ok","agent":{"groups":["default"],"config_token":"default",)"
+                               R"("config_hash":"11111111111111111111111111111111"}})";
 
     int downloads = 0;
     EXPECT_CALL(m_performer, perform(_))
@@ -695,7 +766,7 @@ TEST_F(ControlStreamTest, HashMismatchOnTheDownloadedFileDiscardsIt)
 TEST_F(ControlStreamTest, FailedDownloadRetriesOnTheNextNotify)
 {
     const std::string notify =
-        R"({"status":"ok","agent":{"groups":["default"],"config_hash":"ffff"}})";
+        R"({"status":"ok","agent":{"groups":["default"],"config_token":"default","config_hash":"ffff"}})";
 
     int downloads = 0;
     EXPECT_CALL(m_performer, perform(_))
@@ -735,18 +806,18 @@ TEST_F(ControlStreamTest, DrainStepSendsBareShutdown)
     // drain sends exactly {"type":"shutdown"}, dispatches nothing and
     // downloads nothing.
     const std::string armingNotify = R"({"status":"ok","settings_hash":"different"})";
-    const std::string shutdownResponse =
-        R"({"agent":{"groups":["default"],"config_hash":"drain-mismatch"},"tasks":[)"
-        R"({"task_id":"late","task_type":"active_response","payload":{}}]})";
+    const std::string shutdownResponse = R"({"agent":{"groups":["default"],"config_hash":"drain-mismatch"},"tasks":[)"
+                                         R"({"task_id":"late","task_type":"active_response","payload":{}}]})";
 
     EXPECT_CALL(m_performer, perform(_))
-    .WillOnce(Return(response(TransportStatus::Ok, 200, "{}")))            // Startup.
-    .WillOnce(Return(response(TransportStatus::Ok, 200, armingNotify)))    // Arms refresh.
+    .WillOnce(Return(response(TransportStatus::Ok, 200, "{}")))         // Startup.
+    .WillOnce(Return(response(TransportStatus::Ok, 200, armingNotify))) // Arms refresh.
     .WillOnce(Invoke(
                   [&](const HttpRequestSpec & spec)
     {
         EXPECT_EQ(R"({"type":"shutdown"})", bodyOf(spec));
-        EXPECT_EQ(m_config.drainTimeoutMs, spec.timeoutMs); // Shutdown uses the drain window, not the request timeout.
+        EXPECT_EQ(m_config.drainTimeoutMs,
+                  spec.timeoutMs); // Shutdown uses the drain window, not the request timeout.
         return response(TransportStatus::Ok, 200, shutdownResponse);
     }));
     EXPECT_CALL(m_sink, onTask(_, _, _)).Times(0);
@@ -759,16 +830,14 @@ TEST_F(ControlStreamTest, DrainStepSendsBareShutdown)
 
 TEST_F(ControlStreamTest, NotifyTasksAreDispatchedAndDeduped)
 {
-    const std::string notifyResponse =
-        R"({"status":"ok","tasks":[)"
-        R"({"task_id":"t1","task_type":"active_response","payload":{"cmd":"x"}},)"
-        R"({"task_id":"t2","task_type":"agent_restart","payload":{}}]})";
-    const std::string repeatResponse =
-        R"({"status":"ok","tasks":[)"
-        R"({"task_id":"t1","task_type":"active_response","payload":{"cmd":"x"}}]})";
+    const std::string notifyResponse = R"({"status":"ok","tasks":[)"
+                                       R"({"task_id":"t1","task_type":"active_response","payload":{"cmd":"x"}},)"
+                                       R"({"task_id":"t2","task_type":"agent_restart","payload":{}}]})";
+    const std::string repeatResponse = R"({"status":"ok","tasks":[)"
+                                       R"({"task_id":"t1","task_type":"active_response","payload":{"cmd":"x"}}]})";
 
     EXPECT_CALL(m_performer, perform(_))
-    .WillOnce(Return(response(TransportStatus::Ok, 200, "{}")))  // Startup.
+    .WillOnce(Return(response(TransportStatus::Ok, 200, "{}"))) // Startup.
     .WillOnce(Return(response(TransportStatus::Ok, 200, notifyResponse)))
     .WillOnce(Return(response(TransportStatus::Ok, 200, repeatResponse)));
 
@@ -790,9 +859,8 @@ TEST_F(ControlStreamTest, DurableStoreIsCheckedBeforeDispatchSoARejectionDropsTh
     // (a genuine duplicate) or being unreachable (fail-closed): in
     // both cases checkAndRecord() returning false must drop the task before
     // any handler runs, never after.
-    const std::string body =
-        R"({"status":"ok","tasks":[)"
-        R"({"task_id":"blocked","task_type":"active_response","payload":{}}]})";
+    const std::string body = R"({"status":"ok","tasks":[)"
+                             R"({"task_id":"blocked","task_type":"active_response","payload":{}}]})";
     m_taskStore.forceDuplicate("blocked");
 
     EXPECT_CALL(m_performer, perform(_))
@@ -811,9 +879,8 @@ TEST_F(ControlStreamTest, TaskDispatchesAgainOnceTheDurableStoreForgetsIt)
     // that a store reporting "new" again re-dispatches, matching the
     // at-least-once contract without ControlStream needing its own clock
     // logic (that lives in the durable registry now, tested separately).
-    const std::string body =
-        R"({"status":"ok","tasks":[)"
-        R"({"task_id":"t-restart-sim","task_type":"active_response","payload":{}}]})";
+    const std::string body = R"({"status":"ok","tasks":[)"
+                             R"({"task_id":"t-restart-sim","task_type":"active_response","payload":{}}]})";
     EXPECT_CALL(m_performer, perform(_))
     .WillOnce(Return(response(TransportStatus::Ok, 200, "{}")))
     .WillOnce(Return(response(TransportStatus::Ok, 200, body)))
@@ -821,11 +888,11 @@ TEST_F(ControlStreamTest, TaskDispatchesAgainOnceTheDurableStoreForgetsIt)
     .WillOnce(Return(response(TransportStatus::Ok, 200, body)));
     EXPECT_CALL(m_sink, onTask("t-restart-sim", "active_response", "{}")).Times(2);
 
-    m_stream.step(m_waiter); // Startup.
-    m_stream.step(m_waiter); // Dispatch #1.
+    m_stream.step(m_waiter);             // Startup.
+    m_stream.step(m_waiter);             // Dispatch #1.
     m_taskStore.forget("t-restart-sim"); // Simulated restart / TTL expiry.
-    m_stream.step(m_waiter); // Dispatch #2 (store reports "new" again).
-    m_stream.step(m_waiter); // Duplicate again: dropped.
+    m_stream.step(m_waiter);             // Dispatch #2 (store reports "new" again).
+    m_stream.step(m_waiter);             // Duplicate again: dropped.
 }
 
 TEST_F(ControlStreamTest, NotifyBatchIsPrioritizedAndCollapsedBeforeDispatch)
@@ -836,18 +903,16 @@ TEST_F(ControlStreamTest, NotifyBatchIsPrioritizedAndCollapsedBeforeDispatch)
     // upgrade. Because the durable check runs before the planner, the
     // dropped restart is recorded and its at-least-once redelivery on the
     // next Notify stays dropped.
-    const std::string batch =
-        R"({"status":"ok","tasks":[)"
-        R"({"task_id":"t-restart","task_type":"agent_restart","payload":{}},)"
-        R"({"task_id":"t-reload","task_type":"agent_reload","payload":{}},)"
-        R"({"task_id":"t-up","task_type":"remote_upgrade","payload":{}},)"
-        R"({"task_id":"t-ar","task_type":"active_response","payload":{}}]})";
-    const std::string redelivery =
-        R"({"status":"ok","tasks":[)"
-        R"({"task_id":"t-restart","task_type":"agent_restart","payload":{}}]})";
+    const std::string batch = R"({"status":"ok","tasks":[)"
+                              R"({"task_id":"t-restart","task_type":"agent_restart","payload":{}},)"
+                              R"({"task_id":"t-reload","task_type":"agent_reload","payload":{}},)"
+                              R"({"task_id":"t-up","task_type":"remote_upgrade","payload":{}},)"
+                              R"({"task_id":"t-ar","task_type":"active_response","payload":{}}]})";
+    const std::string redelivery = R"({"status":"ok","tasks":[)"
+                                   R"({"task_id":"t-restart","task_type":"agent_restart","payload":{}}]})";
 
     EXPECT_CALL(m_performer, perform(_))
-    .WillOnce(Return(response(TransportStatus::Ok, 200, "{}")))  // Startup.
+    .WillOnce(Return(response(TransportStatus::Ok, 200, "{}"))) // Startup.
     .WillOnce(Return(response(TransportStatus::Ok, 200, batch)))
     .WillOnce(Return(response(TransportStatus::Ok, 200, redelivery)));
 
@@ -876,10 +941,9 @@ TEST_F(ControlStreamTest, RemoteUpgradeDownloadsVerifiesAndDeliversInsteadOfOnTa
     // run idempotent across the restart it triggers.
     const std::string wpkBytes = "fake-wpk-bytes";
     const std::string wpkSha1 = sha1Hex(wpkBytes.data(), wpkBytes.size());
-    const std::string notify =
-        R"({"status":"ok","tasks":[{"task_id":"up-1","task_type":"remote_upgrade",)"
-        R"("payload":{"wpk_file":"agent.wpk","wpk_sha1":")" + wpkSha1 +
-        R"(","installer":"upgrade.sh"}}]})";
+    const std::string notify = R"({"status":"ok","tasks":[{"task_id":"up-1","task_type":"remote_upgrade",)"
+                               R"("payload":{"wpk_file":"agent.wpk","wpk_sha1":")" +
+                               wpkSha1 + R"(","installer":"upgrade.sh"}}]})";
 
     std::string downloadBody;
     EXPECT_CALL(m_performer, perform(_))
@@ -899,8 +963,8 @@ TEST_F(ControlStreamTest, RemoteUpgradeDownloadsVerifiesAndDeliversInsteadOfOnTa
     std::shared_ptr<SpoolFile> delivered;
     std::string deliveredInstaller;
     EXPECT_CALL(m_sink, onUpgradeReady("up-1", "agent.wpk", _, "upgrade.sh"))
-    .WillOnce(Invoke([&](const std::string&, const std::string&, std::shared_ptr<SpoolFile> file,
-                         const std::string & installer)
+    .WillOnce(Invoke(
+                  [&](const std::string&, const std::string&, std::shared_ptr<SpoolFile> file, const std::string & installer)
     {
         delivered = std::move(file);
         deliveredInstaller = installer;
@@ -956,9 +1020,8 @@ TEST_F(ControlStreamTest, RemoteUpgradeSha1MismatchAbortsWithoutDeliveringOrDisp
 
 TEST_F(ControlStreamTest, RemoteUpgradeMissingPayloadFieldsAbortsWithoutDownloading)
 {
-    const std::string notify =
-        R"({"status":"ok","tasks":[{"task_id":"up-missing","task_type":"remote_upgrade",)"
-        R"("payload":{"wpk_file":"agent.wpk"}}]})"; // wpk_sha1/installer missing.
+    const std::string notify = R"({"status":"ok","tasks":[{"task_id":"up-missing","task_type":"remote_upgrade",)"
+                               R"("payload":{"wpk_file":"agent.wpk"}}]})"; // wpk_sha1/installer missing.
 
     EXPECT_CALL(m_performer, perform(_))
     .WillOnce(Return(response(TransportStatus::Ok, 200, "{}")))
@@ -1000,10 +1063,9 @@ TEST_F(ControlStreamTest, TaskWithoutATaskIdIsSkippedAndTheRestOfTheBatchSurvive
 {
     // A task with no task_id cannot be deduped or identified, so it is
     // dropped (traced at debug). It must not take its batch-mates with it.
-    const std::string body =
-        R"({"tasks":[)"
-        R"({"task_type":"active_response","payload":{}},)"
-        R"({"task_id":"good","task_type":"active_response","payload":{}}]})";
+    const std::string body = R"({"tasks":[)"
+                             R"({"task_type":"active_response","payload":{}},)"
+                             R"({"task_id":"good","task_type":"active_response","payload":{}}]})";
     EXPECT_CALL(m_performer, perform(_))
     .WillOnce(Return(response(TransportStatus::Ok, 200, "{}")))
     .WillOnce(Return(response(TransportStatus::Ok, 200, body)));
@@ -1055,8 +1117,7 @@ TEST_F(ControlStreamTest, ThresholdPausesOnceAndRecoveryReleasesWithoutAStateCha
         }
 
         // Attempts 2-13: three failing steps of four attempts each.
-        return attempt <= 13 ? response(TransportStatus::Timeout, 0)
-               : response(TransportStatus::Ok, 200, "{}");
+        return attempt <= 13 ? response(TransportStatus::Timeout, 0) : response(TransportStatus::Ok, 200, "{}");
     }));
 
     // Counted through the expectations as well as by gmock, so the assertions
@@ -1089,7 +1150,7 @@ TEST_F(ControlStreamTest, ThresholdPausesOnceAndRecoveryReleasesWithoutAStateCha
     EXPECT_EQ(1, pauses); // 2/2: armed here, and not before.
 
     m_stream.step(m_waiter);
-    EXPECT_EQ(1, pauses);  // Still unreachable: no second announcement.
+    EXPECT_EQ(1, pauses); // Still unreachable: no second announcement.
     EXPECT_EQ(0, resumes);
 
     m_stream.step(m_waiter);
@@ -1339,7 +1400,8 @@ TEST_F(ControlStreamTest, PendingRescanTriggersScanVdRequestAndClearsOnSuccess)
     std::vector<std::string> targetsSeen;
     EXPECT_CALL(m_performer, perform(_))
     .WillOnce(Return(response(TransportStatus::Ok, 200, "{}")))
-    .WillRepeatedly(Invoke([&](const HttpRequestSpec & spec)
+    .WillRepeatedly(Invoke(
+                        [&](const HttpRequestSpec & spec)
     {
         targetsSeen.push_back(spec.target);
 
@@ -1369,7 +1431,8 @@ TEST_F(ControlStreamTest, PendingRescanAdvancesOffsetAndRetriesOn409WithNewerVer
     std::vector<std::string> scanVdBodies;
     EXPECT_CALL(m_performer, perform(_))
     .WillOnce(Return(response(TransportStatus::Ok, 200, "{}"))) // Startup.
-    .WillRepeatedly(Invoke([&](const HttpRequestSpec & spec)
+    .WillRepeatedly(Invoke(
+                        [&](const HttpRequestSpec & spec)
     {
         if (spec.target == "/control")
         {
@@ -1410,7 +1473,8 @@ TEST_F(ControlStreamTest, PendingRescanSurvivesA503AndReRequestsOnTheNextNotify)
     int scanVdCalls = 0;
     EXPECT_CALL(m_performer, perform(_))
     .WillOnce(Return(response(TransportStatus::Ok, 200, "{}"))) // Startup.
-    .WillRepeatedly(Invoke([&](const HttpRequestSpec & spec)
+    .WillRepeatedly(Invoke(
+                        [&](const HttpRequestSpec & spec)
     {
         if (spec.target == "/control")
         {
@@ -1459,4 +1523,3 @@ TEST_F(ControlStreamTest, NoPendingRescanMeansNoScanVdRequest)
 
     EXPECT_FALSE(m_vdOffsetStore.pending());
 }
-

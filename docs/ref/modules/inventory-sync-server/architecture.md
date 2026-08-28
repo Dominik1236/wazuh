@@ -13,7 +13,7 @@ flowchart TB
     subgraph Agent["Agent"]
         MOD[syscollector / FIM / SCA / agent-info] --> CLI[FullSession client]
     end
-    CLI -->|"POST /stateful (HTTPS + per-agent AES-CMAC)"| REME
+    CLI -->|"POST /stateful (HTTPS + per-agent JWT bearer)"| REME
 
     subgraph Manager
         subgraph remoted["wazuh-manager-remoted (HTTPS module)"]
@@ -22,7 +22,7 @@ flowchart TB
         subgraph ISS["inventory_sync_server (modulesd) — HTTP/1.1 over UDS"]
             SYNCR["POST /stateful"] -->|non-VD sessions| PIPE[SyncPipeline\nworkers sharded by agent id\none IndexerConnectorSync each\ngroup commit]
             SYNCR -->|"vulnerability-detection sessions\n(queue full ⇒ 503)"| LANE[[VD scan lane\nbounded queue + vd_workers\nscan → ok → index → respond]]
-            DELR["DELETE /agents\n(UDS-local callers only)"]
+            DELR["DELETE /agents\n(UDS-local callers only)"] -->|"enqueue on the agent's shard\nanswers 200 at admission"| PIPE
             PIPE <-.->|in-flight agent registry| LANE
         end
         REME -->|"POST /stateful over UDS\n+ X-Wazuh-Agent-Id"| SYNCR
@@ -37,7 +37,7 @@ flowchart TB
     REME -.->|the agent's own HTTP response| CLI
     PIPE -->|bulk / deleteByQuery / updateByQuery / search| IDX[(wazuh-indexer)]
     LANE -->|"inventory bulk (only if the scan succeeded)"| IDX
-    DELR -->|"deleteByQuery\nwazuh-states-*, wazuh-agent-config, wazuh-agent-stats"| IDX
+    DELR -->|"by-id delete of the two wazuh-agent-* documents,\nqueued on the async connector that writes them"| IDX
     ORCH -->|its own connector| IDX
 ```
 
@@ -190,15 +190,27 @@ production adapter is confined to a single translation unit (`src/vd/vdScannerAd
 
 `DELETE /agents` (and its `POST /agents/delete` alias, for C callers whose HTTP helper only
 speaks POST) deletes every document of one agent across the whole deletion scope —
-`wazuh-states-*`, `wazuh-agent-config` and `wazuh-agent-stats` — scoped to this cluster: a
-`deleteByQuery` on each, then one flush. The two `wazuh-agent-*` indices are named explicitly
-because they sit outside the state family. The production caller is `wazuh-manager-authd`, right
-after it removes the agent from `client.keys` and Wazuh DB.
+`wazuh-states-*`, `wazuh-agent-config` and `wazuh-agent-stats`. The production caller is
+`wazuh-manager-authd`, right after it removes the agent from `client.keys` and Wazuh DB.
 
-The deletion is not executed inline: it is enqueued on the TARGET agent's pipeline shard as a
-special item kind, so it orders FIFO against any in-flight session of that same agent — a
-delete-then-reenroll can never resurrect state, and a scan in flight for that agent is respected
-through the same registry.
+**Two halves, one per writer.** A document can only be deleted in the right ORDER by the connector
+that writes it, and this module writes through two, so the scope is split accordingly
+(`AGENT_DELETION_SCOPE_BY_QUERY` / `AGENT_DELETION_SCOPE_BY_ID`):
+
+- `wazuh-states-*` — written by the sync pipeline, deleted by a cluster-scoped `deleteByQuery` on
+  that connector, then one flush. Not executed inline: it is enqueued on the TARGET agent's pipeline
+  shard as a special item kind, so it orders FIFO against any in-flight session of that same agent —
+  a delete-then-reenroll can never resurrect state, and a scan in flight for that agent is respected
+  through the same registry.
+- `wazuh-agent-config` and `wazuh-agent-stats` — written by `POST /config` and `POST /stats` through
+  the **asynchronous** connector, which accumulates reports and pushes them in batches. Deleted by
+  **document id**, queued on that same connector at admission. The queue is FIFO, so a report it has
+  accepted but not yet pushed is applied before the delete queued behind it; and a by-id delete
+  resolves against the live version map, so it is unaffected by the index refresh interval. These two
+  are deliberately NOT in the by-query scope: a delete-by-query on the sync connector could neither
+  drain that queue nor see an unrefreshed document, which is how a report accepted moments before a
+  deletion used to land after it and outlive the agent. Both are named exactly (not a `wazuh-agent-*`
+  wildcard) so a future index sharing that prefix is not wiped by accident.
 
 **The route answers at admission.** `200 {"status":"queued"}` means the deletion was recorded and
 queued, not that the documents are gone; the item travels without a responder and the purge's own
@@ -216,20 +228,17 @@ version conflict, which `conflicts: "proceed"` counts separately) fails it inste
 success, because with the agent gone nothing would ever overwrite what was missed. A failure is
 logged, and authd — which keeps the deletion queued and persisted until it is accepted — retries it.
 
-Two windows this does NOT cover on its own, both of which leave a document behind while still
-reporting success:
+One window this does NOT cover on its own, which leaves a document behind while still reporting
+success:
 
-- The **index refresh interval**: a delete-by-query is a search, so documents the agent's last session
-  wrote before the index refreshed are invisible to it. Refreshing each index first closed this, but
-  `_refresh` needs the `indices:admin/refresh` privilege that the manager's least-privilege indexer
-  role does not grant — every deletion failed with `403` — so it was removed pending that privilege.
-  **This is why the caller delays the purge**: authd holds each deletion for `authd.purge_delay`
-  seconds before relaying it, so the refresh (and, in a cluster, the worker nodes' `client.keys`
-  reload) has already happened by the time the query runs. See
-  [authd's architecture](../authd/architecture.md).
-- The **asynchronous write queue**: `POST /config` and `POST /stats` are written through the
-  asynchronous connector, whose queue the deletion cannot drain, so a report still queued when the
-  deletion runs lands after it and recreates that agent's document.
+- The **index refresh interval**, for `wazuh-states-*`: a delete-by-query is a search, so documents
+  the agent's last session wrote before the index refreshed are invisible to it. Refreshing each index
+  first closed this, but `_refresh` needs the `indices:admin/refresh` privilege that the manager's
+  least-privilege indexer role does not grant — every deletion failed with `403` — so it was removed
+  pending that privilege. **This is why the caller delays the purge**: authd holds each deletion for
+  `authd.purge_delay` seconds before relaying it, so the refresh (and, in a cluster, the worker nodes'
+  `client.keys` reload) has already happened by the time the query runs. See
+  [authd's architecture](../authd/architecture.md). The by-id half is not exposed to this window.
 
 ## The transport
 
@@ -362,5 +371,5 @@ answers to) lives in the module's in-tree developer README,
 | 11 | **A short scan-lane queue** with immediate `503` on overflow, and per-agent cross-lane exclusion through a shared registry. | Early rejection beats late timeout; the pipeline and the lane can never interleave one agent's operations. |
 | 12 | **The scanner boundary is a neutral view interface** — no FlatBuffers types cross between the modules, in either direction. | The schema can evolve without recompiling the scanner; the adapter is one translation unit. |
 | 13 | **Agent deletion is an endpoint with a visible result**, deferred to the agent's shard. | The caller can retry a failed deletion instead of losing it silently, and deletion orders correctly against the agent's in-flight sessions. |
-| 14 | **Ingress via remoted's authenticated `POST /stateful`** (per-agent AES-CMAC), with the authenticated id cross-checked against the session's claimed identity (`403` on mismatch). | Identity is enforced at the edge AND at the application layer; the body stays opaque to remoted. |
+| 14 | **Ingress via remoted's authenticated `POST /stateful`** (per-agent `wazuh-agent+jwt` bearer), with the authenticated id cross-checked against the session's claimed identity (`403` on mismatch). | Identity is enforced at the edge AND at the application layer; the body stays opaque to remoted. |
 | 15 | **The credential keystore socket lives in its own module** (`keystore_server`). | The manager API's indexer credentials do not depend on the ingestion module's lifecycle. |
