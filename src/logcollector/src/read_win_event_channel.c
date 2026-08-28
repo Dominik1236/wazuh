@@ -45,6 +45,7 @@
 #ifdef WAZUH_UNIT_TESTING
 #include "../../unit_tests/wrappers/wazuh/shared/debug_op_wrappers.h"
 #include "../../unit_tests/wrappers/windows/errhandlingapi_wrappers.h"
+#include "../../unit_tests/wrappers/windows/stringapiset_wrappers.h"
 #include "../../unit_tests/wrappers/windows/winbase_wrappers.h"
 #include "../../unit_tests/wrappers/windows/winevt_wrappers.h"
 
@@ -302,6 +303,38 @@ cleanup:
 }
 
 
+/**
+ * @brief Convert an EvtRender XML buffer to UTF-8 without discarding the event.
+ *
+ * convert_windows_string() passes WC_ERR_INVALID_CHARS, so it fails outright on
+ * ill-formed UTF-16 and the caller drops the whole record, losing the event and
+ * its alert. Retry with dwFlags 0, which makes Windows substitute U+FFFD instead
+ * of failing, so the payload is still valid UTF-8 for the manager. The strict
+ * attempt runs first, so its error log still reports that a provider emitted
+ * ill-formed UTF-16.
+ *
+ * @param wide EvtRender output, UTF-16.
+ * @return Allocated UTF-8 copy, or NULL if even the lossy conversion fails.
+ */
+STATIC char *evt_xml_to_utf8(LPCWSTR wide)
+{
+    char *utf8 = convert_windows_string(wide);
+
+    if (utf8 == NULL) {
+        int size = WideCharToMultiByte(CP_UTF8, 0, wide, -1, NULL, 0, NULL, NULL);
+
+        if (size > 0) {
+            os_calloc(size, sizeof(char), utf8);
+
+            if (!WideCharToMultiByte(CP_UTF8, 0, wide, -1, utf8, size, NULL, NULL)) {
+                os_free(utf8);
+            }
+        }
+    }
+
+    return utf8;
+}
+
 void send_channel_event(EVT_HANDLE evt, os_channel *channel)
 {
     DWORD buffer_length = 0;
@@ -347,7 +380,7 @@ void send_channel_event(EVT_HANDLE evt, os_channel *channel)
             GetLastError());
         goto cleanup;
     }
-    xml_event = convert_windows_string((LPCWSTR) properties_values);
+    xml_event = evt_xml_to_utf8((LPCWSTR) properties_values);
 
     if (!xml_event) {
         goto cleanup;

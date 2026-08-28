@@ -121,10 +121,98 @@ void test_send_channel_event_success(void ** state) {
 }
 
 
+/* When convert_windows_string() rejects ill-formed UTF-16, the event must still
+ * be sent after a lossy conversion, not dropped. */
+void test_send_channel_event_invalid_utf16_is_sanitized(void ** state) {
+    os_channel *channel = (os_channel *)*state;
+    EVT_HANDLE evt = (EVT_HANDLE)1;
+    WCHAR xml_wide[] = L"<Event><System><Provider Name='Test'/></System><EventData><Data>bad</Data></EventData></Event>";
+    char sanitized[] = "<Event><System><Provider Name='Test'/></System><EventData><Data>bad\xEF\xBF\xBD</Data></EventData></Event>";
+
+    expect_value(wrap_EvtRender, Context, NULL);
+    expect_value(wrap_EvtRender, Fragment, evt);
+    expect_value(wrap_EvtRender, Flags, EvtRenderEventXml);
+    expect_value(wrap_EvtRender, BufferSize, 0);
+    will_return(wrap_EvtRender, NULL);
+    will_return(wrap_EvtRender, (wcslen(xml_wide) + 1) * sizeof(WCHAR));
+    will_return(wrap_EvtRender, 0);
+    will_return(wrap_EvtRender, FALSE);
+    will_return(wrap_GetLastError, ERROR_INSUFFICIENT_BUFFER);
+
+    expect_value(wrap_EvtRender, Context, NULL);
+    expect_value(wrap_EvtRender, Fragment, evt);
+    expect_value(wrap_EvtRender, Flags, EvtRenderEventXml);
+    expect_value(wrap_EvtRender, BufferSize, (wcslen(xml_wide) + 1) * sizeof(WCHAR));
+    will_return(wrap_EvtRender, xml_wide);
+    will_return(wrap_EvtRender, (wcslen(xml_wide) + 1) * sizeof(WCHAR));
+    will_return(wrap_EvtRender, 0);
+    will_return(wrap_EvtRender, TRUE);
+
+    /* Strict conversion rejects the buffer, as WC_ERR_INVALID_CHARS does on ill-formed UTF-16. */
+    expect_any(__wrap_convert_windows_string, string);
+    will_return(__wrap_convert_windows_string, NULL);
+
+    /* Lossy retry: size probe, then the conversion that substitutes U+FFFD. */
+    expect_memory(wrap_WideCharToMultiByte, lpWideCharStr, xml_wide, wcslen(xml_wide) * sizeof(WCHAR));
+    expect_value(wrap_WideCharToMultiByte, cchWideChar, -1);
+    will_return(wrap_WideCharToMultiByte, strlen(sanitized) + 1);
+
+    expect_memory(wrap_WideCharToMultiByte, lpWideCharStr, xml_wide, wcslen(xml_wide) * sizeof(WCHAR));
+    expect_value(wrap_WideCharToMultiByte, cchWideChar, -1);
+    will_return(wrap_WideCharToMultiByte, sanitized);
+    will_return(wrap_WideCharToMultiByte, strlen(sanitized) + 1);
+
+    /* The event is still delivered, carrying the replacement character. */
+    expect_string(__wrap_SendMSG, message, sanitized);
+    expect_string(__wrap_SendMSG, locmsg, "EventChannel");
+    expect_value(__wrap_SendMSG, loc, WIN_EVT_MQ);
+    will_return(__wrap_SendMSG, 0);
+
+    send_channel_event(evt, channel);
+}
+
+/* The event is dropped only when the lossy conversion also fails. */
+void test_send_channel_event_conversion_fails_completely(void ** state) {
+    os_channel *channel = (os_channel *)*state;
+    EVT_HANDLE evt = (EVT_HANDLE)1;
+    WCHAR xml_wide[] = L"<Event><System><Provider Name='Test'/></System></Event>";
+
+    expect_value(wrap_EvtRender, Context, NULL);
+    expect_value(wrap_EvtRender, Fragment, evt);
+    expect_value(wrap_EvtRender, Flags, EvtRenderEventXml);
+    expect_value(wrap_EvtRender, BufferSize, 0);
+    will_return(wrap_EvtRender, NULL);
+    will_return(wrap_EvtRender, (wcslen(xml_wide) + 1) * sizeof(WCHAR));
+    will_return(wrap_EvtRender, 0);
+    will_return(wrap_EvtRender, FALSE);
+    will_return(wrap_GetLastError, ERROR_INSUFFICIENT_BUFFER);
+
+    expect_value(wrap_EvtRender, Context, NULL);
+    expect_value(wrap_EvtRender, Fragment, evt);
+    expect_value(wrap_EvtRender, Flags, EvtRenderEventXml);
+    expect_value(wrap_EvtRender, BufferSize, (wcslen(xml_wide) + 1) * sizeof(WCHAR));
+    will_return(wrap_EvtRender, xml_wide);
+    will_return(wrap_EvtRender, (wcslen(xml_wide) + 1) * sizeof(WCHAR));
+    will_return(wrap_EvtRender, 0);
+    will_return(wrap_EvtRender, TRUE);
+
+    expect_any(__wrap_convert_windows_string, string);
+    will_return(__wrap_convert_windows_string, NULL);
+
+    /* Size probe returns 0, so there is nothing to send and no SendMSG is expected. */
+    expect_memory(wrap_WideCharToMultiByte, lpWideCharStr, xml_wide, wcslen(xml_wide) * sizeof(WCHAR));
+    expect_value(wrap_WideCharToMultiByte, cchWideChar, -1);
+    will_return(wrap_WideCharToMultiByte, 0);
+
+    send_channel_event(evt, channel);
+}
+
 int main(void) {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test_setup_teardown(test_send_channel_event_render_buffer_size_fail, test_setup, test_teardown),
-        cmocka_unit_test_setup_teardown(test_send_channel_event_success, test_setup, test_teardown)
+        cmocka_unit_test_setup_teardown(test_send_channel_event_success, test_setup, test_teardown),
+        cmocka_unit_test_setup_teardown(test_send_channel_event_invalid_utf16_is_sanitized, test_setup, test_teardown),
+        cmocka_unit_test_setup_teardown(test_send_channel_event_conversion_fails_completely, test_setup, test_teardown)
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);
