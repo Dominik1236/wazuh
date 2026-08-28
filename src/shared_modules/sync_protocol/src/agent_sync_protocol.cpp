@@ -547,15 +547,9 @@ SyncModuleResult AgentSyncProtocol::synchronizeMetadataOrGroups(Mode mode,
     return {success, std::move(failureReason), stopped, managerNotReady, consecutiveFailures, awaitingPrerequisite, false};
 }
 
-bool AgentSyncProtocol::notifyDataClean(const std::vector<std::string>& indices,
-                                        Option option)
-{
-    return notifyDataCleanResult(indices, option).success;
-}
-
-SyncModuleResult AgentSyncProtocol::notifyDataCleanResult(const std::vector<std::string>& indices,
-                                                          Option option,
-                                                          bool trackConsecutiveFailures)
+SyncModuleResult AgentSyncProtocol::notifyDataClean(const std::vector<std::string>& indices,
+                                                    Option option,
+                                                    bool trackConsecutiveFailures)
 {
     if (indices.empty())
     {

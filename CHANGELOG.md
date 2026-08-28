@@ -145,4 +145,3 @@
 | [#38065](https://github.com/wazuh/wazuh/issues/38065) | Fixed SCA and Syscollector sync threads not blocking `SIGTERM`, which could cause the shutdown handler to run on a module thread instead of the main thread and time out joining it. |
 | [#38212](https://github.com/wazuh/wazuh/issues/38212) | Fixed the Windows agent leaving the FIM synchronization database open when the service stopped, which left the `queue\` directory behind after an uninstall without purge. |
 | [#38646](https://github.com/wazuh/wazuh/pull/38646) | Fixed SCA HIPAA compliance mappings across policy checks. |
-| [#38579](https://github.com/wazuh/wazuh/issues/38579) | Fixed SCA logging a WARNING on the first synchronization attempt after an agent restart when the manager wasn't ready yet to clear its index, instead of applying the same manager-not-ready retry tolerance used by the rest of the module. |

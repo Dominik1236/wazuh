@@ -2942,7 +2942,7 @@ bool Syscollector::notifyDataClean(const std::vector<std::string>& indices)
 
     if (m_spSyncProtocol)
     {
-        return m_spSyncProtocol->notifyDataClean(indices);
+        return m_spSyncProtocol->notifyDataClean(indices).success;
     }
 
     return false;
@@ -4413,7 +4413,7 @@ bool Syscollector::notifyDisableCollectorsDataClean()
         m_logFunction(LOG_DEBUG, "Notifying DataClean for disabled collectors indices: " + indices);
     }
 
-    return m_spSyncProtocol->notifyDataClean(m_disabledCollectorsIndicesWithData);
+    return m_spSyncProtocol->notifyDataClean(m_disabledCollectorsIndicesWithData).success;
     // LCOV_EXCL_STOP
 }
 
@@ -4847,7 +4847,7 @@ void Syscollector::runRecoveryProcess()
                 // (which used to make the manager unconditionally deleteByQuery over a
                 // byte-capped/truncated payload and could permanently drop whatever didn't
                 // fit in that one session).
-                if (!m_spSyncProtocol->notifyDataClean({index}))
+                if (!m_spSyncProtocol->notifyDataClean({index}).success)
                 {
                     m_logFunction(LOG_WARNING, "Failed to clear index " + index + " before recovery resync for table " + tableName + "; will retry later");
                     return;
