@@ -782,27 +782,34 @@ Cap on a downstream response body, in bytes.
 
 Maximum **age** (seconds) of an agent's bearer token (`wazuh-agent+jwt`) the auth middleware accepts:
 a token is usable while `now - iat <= jwt_max_age + jwt_clock_skew`. The token's declared lifetime
-(`exp - iat`) is a fixed 60 s of the profile and is not configurable; this option can only shorten
-the window in which an issued token is still honoured.
+(`exp - iat`) is a fixed 60 s of the profile and is not configurable; this option (together with
+`jwt_clock_skew` below) governs how much manager/agent clock drift is tolerated before an otherwise
+valid token is rejected as stale.
 
 - **Default value:** `60`
-- **Allowed values:** Integer from `1` to `60` (the profile maximum -- a larger value keeps remoted
-  from starting)
+- **Allowed values:** Integer from `1` to `43200` (12h, the profile maximum -- a larger value keeps
+  remoted from starting)
 - **Note:** Rejections against the time window (too old, expired, or issued in the future) are
   visible as `remoted.auth.reject.clock_skew` in
   [`GET /metrics`](metrics.md#authentication-rejections--remotedauthreject). A moving counter
-  usually means unsynchronized agent clocks — fix NTP before touching the window.
+  usually means unsynchronized agent clocks — fix NTP before widening the window. Widening it also
+  widens the replay window of a captured token (this profile has no replay store); rely on it only
+  as far as the deployment's clock drift actually requires.
 
 #### remoted.jwt_clock_skew
 
 Tolerated clock difference (seconds) between an agent and the manager, applied in both directions:
 a token may be issued up to `jwt_clock_skew` seconds in the future, and is still accepted up to
-`jwt_clock_skew` seconds after its `exp`.
+`jwt_clock_skew` seconds after its `exp`. This is the option that matters most for tolerating a real
+manager/agent clock difference -- `jwt_max_age` above bounds total token age, but a clock skew
+between the two hosts is compensated for here.
 
 - **Default value:** `30`
-- **Allowed values:** Integer from `0` to `30` (the profile maximum; `0` means no tolerance at all)
+- **Allowed values:** Integer from `0` to `43200` (12h, the profile maximum; `0` means no tolerance
+  at all)
 - **Note:** Shares the `remoted.auth.reject.clock_skew` counter with `remoted.jwt_max_age` (see
-  above). Also bounds the freshness window of `POST /enroll`.
+  above). Also bounds the freshness window of `POST /enroll`. Widening it also widens the replay
+  window of a captured token (this profile has no replay store).
 
 #### remoted.auth_max_body_size
 
@@ -827,10 +834,25 @@ database.
 
 - **Default value:** `60`
 - **Allowed values:** Integer from `1` to `3600`
-- **Note:** This must stay at or above the agent's notify cadence, or every notify becomes a
-  database write. It must also stay well below `<global><agents_disconnection_time>` (default
-  `15m`), since a throttled notify is what refreshes `last_keepalive` -- set the throttle above
-  the disconnection time and active agents are reported as disconnected.
+- **Note:** `last_keepalive` is refreshed by the first notify that is **not** throttled, that is,
+  the first one arriving at or after the end of a window. A throttled notify never reaches the
+  database, so the effective staleness of `last_keepalive` is up to one whole window. Two writes
+  ignore the window: the first host-carrying notify, and the first notify after a `startup`
+  (which must lift the agent out of the `pending` state a startup leaves in wazuh-db).
+- **Note:** Keep it below half of `<global><agents_disconnection_time>` (default `15m`); remoted
+  warns at startup from half upward. The staleness monitord compares against the threshold is the
+  throttle plus the agent's notify interval, so any value at or above half can disconnect agents
+  that are answering normally. Half rather than just below the threshold also bounds detection:
+  monitord's sweep period is the disconnection time itself, so detection lands anywhere between
+  one and two times it.
+- **Note:** A value at or below the fleet's notify cadence suppresses nothing: the throttle can
+  only drop a notify that arrives inside an open window. This is not checked at startup, because
+  remoted does not know the agent's `notify_time`.
+- **Note:** 5.x agents only. A 4.x keepalive is written by the legacy path, ungated, so a sizing
+  table built from this option has to count 5.x agents alone.
+- **Note:** The throttle state lives in remoted's in-memory registry, which is per node. An agent
+  alternating between cluster nodes is throttled independently on each, so its worst-case
+  database write rate is one write per window **per node**.
 
 #### remoted.control_groups_refresh_interval
 
@@ -838,7 +860,13 @@ Seconds between refreshes of the cached shared-group listing used to answer `/co
 
 - **Default value:** `60`
 - **Allowed values:** Integer from `1` to `3600`
-- **Note:** This is the propagation latency an agent sees for a centralised-configuration change.
+- **Note:** This is the propagation latency an agent sees for a change of group **membership**
+  only. Group **content** travels on a different path: the merged-groups watcher picks up a
+  changed `merged.mg` on inotify plus a poll, so content propagates in seconds while membership
+  waits out this interval. At the defaults that is roughly 60 s against 10 s, and at the maximum
+  of `3600` the two differ by about two orders of magnitude.
+- **Note:** Editing `var/multigroups/<hash>/merged.mg` by hand is not a way to reproduce this:
+  `remoted.shared_reload` (default `10`) regenerates the file and reverts the edit.
 
 #### remoted.control_wdb_request_connections
 
