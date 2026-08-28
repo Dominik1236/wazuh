@@ -57,6 +57,9 @@ def file_to_monitor(test_metadata: dict) -> Any:
 
 @pytest.fixture()
 def folder_to_monitor(test_metadata: dict) -> None:
+    # test_files/test_report_changes/test_large_changes.py depends on this fixture too, so the
+    # retry below also covers its intermittent Windows teardown failure reported in #38675 --
+    # that failure's traceback was never captured, but it shares this same teardown call.
     path = test_metadata.get("folder_to_monitor")
     path = os.path.abspath(path)
 
