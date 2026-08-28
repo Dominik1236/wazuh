@@ -1848,6 +1848,20 @@ int w_msg_hash_queues_push(const char *str, char *file, unsigned long size, logt
 
         str = sanitized;
         size = strlen(sanitized) + 1;
+
+        /* Clamp on a UTF-8 boundary. */
+        if (size > OS_MAXSTR - OS_LOG_HEADER) {
+            size_t cut = OS_MAXSTR - OS_LOG_HEADER - 1;
+
+            while (cut > 0 && ((unsigned char)sanitized[cut] & 0xC0) == 0x80) {
+                cut--;
+            }
+
+            sanitized[cut] = '\0';
+            size = cut + 1;
+            mdebug2("Sanitized log line from file '%s' exceeded the message size. Truncated to %lu bytes.",
+                    file, (unsigned long)cut);
+        }
     }
 
     for (i = 0; targets[i].log_socket; i++)
