@@ -206,12 +206,39 @@ STATIC int SendBinaryMSGAction(int queue, const void *message, size_t message_le
     return (0);
 }
 
+/**
+ * @brief Replace invalid UTF-8 bytes in an escaped location.
+ *
+ * The engine puts the location and the payload in the same JSON document, and
+ * Json::str() aborts the whole document on any invalid byte, so a log file
+ * whose *name* is not UTF-8 loses every event exactly as an invalid byte in the
+ * line does. wstr_escape() only escapes '|' and ':', so everything else reaches
+ * here untouched. Filtering at this point covers every sender instead of one
+ * reader at a time.
+ *
+ * @param loc_buff Escaped location. Modified in place.
+ * @param size Size of loc_buff, including the null terminator.
+ */
+STATIC void w_sanitize_location(char * loc_buff, size_t size) {
+    if (w_utf8_valid(loc_buff)) {
+        return;
+    }
+
+    char * filtered = w_utf8_filter(loc_buff, true);
+    size_t length = w_utf8_truncate(filtered, size - 1);
+
+    memcpy(loc_buff, filtered, length + 1);
+    os_free(filtered);
+}
+
 /* Send message primitive. */
 STATIC int SendMSGAction(int queue, const char *message, const char *locmsg, char loc) {
     int __mq_rcode;
     char tmpstr[OS_MAXSTR + 1] = {0};
     char loc_buff[OS_SIZE_8192 + 1] = {0};
     static int reported = 0;
+    size_t header_length;
+    size_t message_length;
 
     tmpstr[OS_MAXSTR] = '\0';
 
@@ -219,6 +246,14 @@ STATIC int SendMSGAction(int queue, const char *message, const char *locmsg, cha
         merror(FORMAT_ERROR);
         return (0);
     }
+
+    w_sanitize_location(loc_buff, sizeof(loc_buff));
+
+    /* The snprintf below cuts at a byte offset, which can split a multi-byte
+     * character and put invalid UTF-8 back on the wire. The header is the only
+     * thing standing between the payload and OS_MAXSTR, and its real length is
+     * the escaped location, up to OS_SIZE_8192, not OS_LOG_HEADER. Measure it
+     * and hand snprintf a length that keeps every character whole. */
 
     if (loc == SECURE_MQ) {
         loc = message[0];
@@ -234,9 +269,15 @@ STATIC int SendMSGAction(int queue, const char *message, const char *locmsg, cha
             return (0);
         }
 
-        snprintf(tmpstr, OS_MAXSTR, "%c:%s->%s", loc, loc_buff, message);
+        header_length = strlen(loc_buff) + 4; /* "%c:" + loc_buff + "->" */
+        message_length = w_utf8_truncate_len(message, OS_MAXSTR - 1 - header_length);
+
+        snprintf(tmpstr, OS_MAXSTR, "%c:%s->%.*s", loc, loc_buff, (int)message_length, message);
     } else {
-        snprintf(tmpstr, OS_MAXSTR, "%c:%s:%s", loc, loc_buff, message);
+        header_length = strlen(loc_buff) + 3; /* "%c:" + loc_buff + ":" */
+        message_length = w_utf8_truncate_len(message, OS_MAXSTR - 1 - header_length);
+
+        snprintf(tmpstr, OS_MAXSTR, "%c:%s:%.*s", loc, loc_buff, (int)message_length, message);
     }
 
     /* Queue not available */

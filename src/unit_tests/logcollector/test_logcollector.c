@@ -2909,6 +2909,42 @@ void check_ignore_and_restrict_restricted(void ** state) {
     assert_true(ret);
 }
 
+void test_w_msg_hash_queues_push_replaces_invalid_utf8_and_resizes(void ** state) {
+    (void)state;
+
+    socket_forwarder forwarder = {.name = "agent"};
+    logtarget targets[2] = {{.log_socket = &forwarder}, {0}};
+    w_msg_queue_t msg_queue = {0};
+
+    msg_queue.msg_queue = queue_init(2);
+    w_mutex_init(&msg_queue.mutex, NULL);
+    w_cond_init(&msg_queue.available, NULL);
+
+    test_mode = 1;
+
+    expect_any(__wrap_OSHash_Get, self);
+    expect_string(__wrap_OSHash_Get, key, "agent");
+    will_return(__wrap_OSHash_Get, &msg_queue);
+
+    expect_string(__wrap__mwarn, formatted_msg,
+                  "Invalid UTF-8 byte in a log line from file '/testlogs/plain.log'. Replacing it with U+FFFD.");
+
+    w_msg_hash_queues_push("caf\xE9", "/testlogs/plain.log", 5, targets, LOCALFILE_MQ);
+
+    test_mode = 0;
+
+    w_message_t * message = queue_pop(msg_queue.msg_queue);
+
+    assert_non_null(message);
+    assert_string_equal(message->buffer, "caf\xEF\xBF\xBD");
+    assert_int_equal(message->size, strlen("caf\xEF\xBF\xBD") + 1);
+
+    os_free(message->buffer);
+    os_free(message->file);
+    os_free(message);
+    queue_free(msg_queue.msg_queue);
+}
+
 int main(void) {
     const struct CMUnitTest tests[] = {
         // Test w_get_hash_context
@@ -3022,7 +3058,10 @@ int main(void) {
         cmocka_unit_test_setup_teardown(check_ignore_and_restrict_not_ignored, setup_regex, teardown_regex),
         cmocka_unit_test_setup_teardown(check_ignore_and_restrict_ignored, setup_regex, teardown_regex),
         cmocka_unit_test_setup_teardown(check_ignore_and_restrict_not_restricted, setup_regex, teardown_regex),
-        cmocka_unit_test_setup_teardown(check_ignore_and_restrict_restricted, setup_regex, teardown_regex)
+        cmocka_unit_test_setup_teardown(check_ignore_and_restrict_restricted, setup_regex, teardown_regex),
+
+        // Test w_msg_hash_queues_push
+        cmocka_unit_test(test_w_msg_hash_queues_push_replaces_invalid_utf8_and_resizes)
 
     };
 

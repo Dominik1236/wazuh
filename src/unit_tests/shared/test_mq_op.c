@@ -503,6 +503,51 @@ void test_SendMSGAction_secure_msg_keepalive(void ** state){
     assert_int_equal(ret, 0);
 }
 
+void test_SendMSGAction_replaces_an_invalid_utf8_byte_in_the_location(void ** state){
+    (void)state;
+    int queue = 0;
+
+    expect_value(__wrap_OS_SendUnix, socket, queue);
+    expect_string(__wrap_OS_SendUnix, msg, "1:/var/log/caf\xEF\xBF\xBD.log:message");
+    expect_value(__wrap_OS_SendUnix, size, 0);
+    will_return(__wrap_OS_SendUnix, 1);
+
+    int ret = SendMSG(queue, "message", "/var/log/caf\xE9.log", LOCALFILE_MQ);
+
+    assert_int_equal(ret, 0);
+}
+
+void test_SendMSGAction_cuts_an_oversize_message_on_a_character_boundary(void ** state){
+    (void)state;
+    int queue = 0;
+    char location[300];
+    char message[OS_MAXSTR];
+    char expected[OS_MAXSTR];
+
+    memset(location, 'a', sizeof(location) - 1);
+    location[sizeof(location) - 1] = '\0';
+
+    size_t budget = OS_MAXSTR - 1 - (strlen(location) + 3);
+
+    memset(message, 'b', budget - 1);
+    memcpy(message + budget - 1, "\xE2\x82\xAC", 3);
+    message[budget + 2] = '\0';
+
+    int header = snprintf(expected, sizeof(expected), "1:%s:", location);
+    memset(expected + header, 'b', budget - 1);
+    expected[header + budget - 1] = '\0';
+
+    expect_value(__wrap_OS_SendUnix, socket, queue);
+    expect_string(__wrap_OS_SendUnix, msg, expected);
+    expect_value(__wrap_OS_SendUnix, size, 0);
+    will_return(__wrap_OS_SendUnix, 1);
+
+    int ret = SendMSG(queue, message, location, LOCALFILE_MQ);
+
+    assert_int_equal(ret, 0);
+    assert_true(w_utf8_valid(expected));
+}
+
 void test_SendBinaryMSGAction_secure_mq_not_supported(void **state) {
     (void)state;
 
@@ -622,6 +667,8 @@ int main(void){
        cmocka_unit_test(test_SendMSGAction_socket_busy),
        cmocka_unit_test(test_SendMSGAction_non_secure_msg),
        cmocka_unit_test(test_SendMSGAction_secure_msg_keepalive),
+       cmocka_unit_test(test_SendMSGAction_replaces_an_invalid_utf8_byte_in_the_location),
+       cmocka_unit_test(test_SendMSGAction_cuts_an_oversize_message_on_a_character_boundary),
        // Test test_SendBinaryMSG
        cmocka_unit_test(test_SendBinaryMSGAction_secure_mq_not_supported),
        cmocka_unit_test(test_SendBinaryMSGAction_message_too_large),

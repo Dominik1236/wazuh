@@ -41,6 +41,20 @@ char * w_utf8_filter(const char * string, bool replacement);
 
 
 /**
+ * @brief Get the length a string may be cut to without splitting a UTF-8 character.
+ *
+ * Same boundary arithmetic as w_utf8_truncate(), for a caller that cannot write
+ * to the string, for instance because it is about to be copied out with a
+ * precision specifier.
+ *
+ * @param string String to be measured.
+ * @param max_length Maximum length in bytes, excluding the null terminator.
+ * @return Length in bytes that keeps every character whole.
+ */
+size_t w_utf8_truncate_len(const char * string, size_t max_length);
+
+
+/**
  * @brief Truncate a string in place without splitting a UTF-8 character.
  *
  * Cutting at a fixed byte offset can fall inside a multi-byte sequence and

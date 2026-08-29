@@ -127,7 +127,7 @@ char * w_utf8_filter(const char * string, bool replacement) {
     return copy;
 }
 
-size_t w_utf8_truncate(char * string, size_t max_length) {
+size_t w_utf8_truncate_len(const char * string, size_t max_length) {
     assert(string != NULL);
 
     size_t length = strlen(string);
@@ -144,6 +144,12 @@ size_t w_utf8_truncate(char * string, size_t max_length) {
     while (cut > 0 && ((unsigned char)string[cut] & 0xC0) == 0x80) {
         cut--;
     }
+
+    return cut;
+}
+
+size_t w_utf8_truncate(char * string, size_t max_length) {
+    size_t cut = w_utf8_truncate_len(string, max_length);
 
     string[cut] = '\0';
     return cut;
