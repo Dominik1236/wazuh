@@ -28,6 +28,12 @@ All notable changes to this project will be documented in this file.
 - Fixed WPK upgrade failing on agents without the `find` binary. ([#38431](https://github.com/wazuh/wazuh/pull/38431))
 - Bounded the `snort-full` log record appends to the available buffer space and sized the queued preprocessor message from its own line in `wazuh-logcollector`. ([#38472](https://github.com/wazuh/wazuh/pull/38472))
 
+### Ruleset
+
+#### Fixed
+
+- Fixed the gpgcheck regex to accept gpgcheck=True and the double-space typo blocking the vsftpd-not-installed check in the CIS Amazon Linux 2023 SCA policy. 
+
 ## [v4.14.8]
 
 ### Manager
