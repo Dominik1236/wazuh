@@ -32,7 +32,7 @@ All notable changes to this project will be documented in this file.
 
 #### Fixed
 
-- Fixed the gpgcheck regex to accept gpgcheck=True and the double-space typo blocking the vsftpd-not-installed check in the CIS Amazon Linux 2023 SCA policy. 
+- Fixed the gpgcheck regex to accept gpgcheck=True and the double-space typo blocking the vsftpd-not-installed check in the CIS Amazon Linux 2023 SCA policy. ([#38723](https://github.com/wazuh/wazuh/pull/38723))
 
 ## [v4.14.8]
 
